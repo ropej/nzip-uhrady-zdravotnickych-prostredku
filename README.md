@@ -24,6 +24,7 @@ Interaktivní report analyzující objem a strukturu úhrad zdravotnických pros
 - `nzip-zdravotnicke-prostredky.qmd` – zdrojový Quarto dokument
 - `nzip-funkce.R` – pomocné statistické funkce
 - `pzt_ciselnik.rds` – číselník skupin zdravotnických prostředků
+- `kraje_ciselnik.rds` – číselník okresů a krajů
 - `docs/index.html` – renderovaný report (GitHub Pages)
 
 ## Autor
