@@ -11,3 +11,13 @@
 
 # Lokální číselník z jiného projektu (necommitovat)
 ciselnik - orp, kraje ver_210504.xlsx
+
+# Stažená/lokální data a cache (stahují se v dokumentu z URL)
+*.csv
+*.pdf
+rsconnect/
+kraje_ciselnik.rds
+pacienti.rds
+pojistovny.rds
+poskytovatele.rds
+# pzt_ciselnik.rds je commitnutý záměrně (viz README)
