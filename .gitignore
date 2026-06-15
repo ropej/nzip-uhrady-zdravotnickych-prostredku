@@ -12,9 +12,6 @@
 # Google Analytics hlavička (lokální, necommitovat)
 google-analytics.html
 
-# Lokální číselník z jiného projektu (necommitovat)
-ciselnik - orp, kraje ver_210504.xlsx
-
 # Stažená/lokální data a cache (stahují se v dokumentu z URL)
 *.csv
 *.pdf
