@@ -1,0 +1,13 @@
+# R / Quarto pracovní soubory
+*_cache/
+*_files/
+*.RData
+*.Rhistory
+.Rproj.user/
+
+# Renderovaný HTML v kořeni (publikuje se přes docs/index.html)
+/nzip-zdravotnicke-prostredky.html
+*.rmarkdown
+
+# Lokální číselník z jiného projektu (necommitovat)
+ciselnik - orp, kraje ver_210504.xlsx

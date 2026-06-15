@@ -1,0 +1,1925 @@
+---
+title: "Analýza úhrad zdravotnických prostředků v ČR"
+author: "Romana Pejcalová"
+date: "2026-05-19"
+lang: cs
+execute:
+  execute-dir: file
+format:
+  html:
+    theme: journal
+    toc: true
+    toc-depth: 3
+    toc-location: right
+    embed-resources: true
+    number-sections: true
+    number-depth: 3
+    code-fold: true
+    code-summary: "Zobrazit kód"
+    crossref:
+      fig-title: "Obrázek"
+      tbl-title: "Tabulka"
+    smooth-scroll: true
+    code-copy: true
+    google-analytics: "G-KJTWZJGXRQ"
+    include-in-header: google-analytics.html
+editor: visual
+---
+
+```{css, echo=FALSE}
+h1, h2, h3, h4, h5, h6 {
+  color: #007B3DFF;
+}
+
+h3 {
+  font-size: 1.2rem;
+}
+
+figcaption,
+.figure-caption,
+.quarto-float-caption-inner {
+  text-align: center !important;
+  color: #6c757d;
+  font-size: 0.95em;
+  text-align: left;
+}
+
+figure.quarto-float-tbl figcaption.quarto-float-caption-top {
+  text-align: left !important;
+  color: #6c757d;
+  font-size: 0.95em;
+}
+
+table caption {
+  text-align: left !important;
+  color: #6c757d;
+  font-size: 0.95em;
+}
+
+table th {
+  text-align: center !important;
+  vertical-align: middle !important;
+}
+
+table.tbl-popis-dat {
+  width: 97% !important;
+}
+```
+
+```{r setup}
+#| include: false
+# Potřebné knihovny k načtení
+library(scales)
+library(ggplot2)
+library(dplyr)
+library(modelsummary)
+library(stringi)
+library(readxl)
+library(stringr)
+library(plotly)
+library(readr)
+
+# Required ggplot theme
+theme_set(theme_minimal())
+
+barvy <- c('#D51317', '#F39200', '#EFD500', '#95C11F', '#007B3DFF', '#31B7BC', '#0094CD')
+
+# Czech locations
+loc <- Sys.setlocale(locale = "Czech")
+options(OutDec = ",")
+
+# Pomocné statistické funkce (Cramérovo V, Gini, HHI, LMDI, velikosti účinku)
+source("nzip-funkce.R", local = knitr::knit_global())
+```
+
+# Stručný deskriptivní popis datové sady
+
+Analyzovaná datová sada **„Zdravotnické prostředky – kód, měsíc, IČZ“** pochází z Národního registru hrazených zdravotních služeb (NRHZS), který spravuje Ústav zdravotnických informací a statistiky ČR (ÚZIS). Datová sada poskytuje informace o objemu zdravotnických prostředků hrazených z veřejného zdravotního pojištění vykázaných jednotlivými poskytovateli zdravotních služeb za posledních pět let.
+
+Primárním cílem datové sady je umožnit hodnocení objemu vykázaných zdravotnických prostředků a souvisejících úhrad zdravotních pojišťoven na úrovni jednotlivých poskytovatelů zdravotních služeb. Data jsou agregována podle roku a měsíce vykázání, kódu zdravotnického prostředku, skupiny zdravotnického prostředku, poskytovatele zdravotních služeb (IČZ), okresu předepisujícího pracoviště a odbornosti předepisujícího pracoviště.
+
+Datová sada obsahuje přibližně **11,9 milionu záznamů**, má **9 atributů** a její velikost činí přibližně **713 MB**. Data jsou zveřejněna ve formátu CSV a aktualizována jednou ročně za uzavřený kalendářní rok.
+
+Analýza byla dále doplněna také o datovou sadu **„Zdravotnické prostředky – kód, měsíc, zdravotní pojišťovna“**, která umožňuje sledovat strukturu úhrad podle jednotlivých zdravotních pojišťoven. Díky tomu bylo možné analyzovat podíly jednotlivých pojišťoven na celkových úhradách zdravotnických prostředků a jejich vývoj v čase.
+
+Mezi hlavní sledované proměnné patří:
+
+-   `rok` – rok vykázání zdravotnického prostředku,
+-   `mesic` – měsíc vykázání,
+-   `kod` – kód zdravotnického prostředku,
+-   `pzt_typ` – skupina zdravotnického prostředku,
+-   `icz` – identifikační číslo poskytovatele zdravotních služeb,
+-   `okres_predepsani` – okres předepisujícího pracoviště,
+-   `odbornost_predepisujici` – odbornost pracoviště, které zdravotnický prostředek předepsalo,
+-   `pojistovna` – zdravotní pojišťovna, která zdravotnický prostředek hradila,
+-   `pocet_baleni` – počet vykázaných balení,
+-   `uhrada_zp` – celková úhrada od zdravotních pojišťoven v Kč.
+
+V rámci analýzy byla datová sada podle číselníků VZP dále rozšířena o:
+
+-   **skupiny odborností** předepisujících pracovišť,
+-   **typ péče** (ambulantní, lůžková, neuvedeno),
+-   a **slovní názvy skupin zdravotnických prostředků**.
+
+Datová sada zahrnuje pouze zdravotní služby hrazené z veřejného zdravotního pojištění. Neobsahuje údaje o samoplátcích, připojištění ani péči nevykazované zdravotním pojišťovnám.
+
+Před vlastní analýzou byla data očištěna od prázdných hodnot a doplněna o několik externích číselníků. Pomocí číselníků ÚZIS a VZP byly jednotlivým záznamům přiřazeny názvy skupin zdravotnických prostředků, typ poskytovatele zdravotních služeb a příslušnost ke kraji.
+
+```{r ciselniky}
+# --- Načtení a příprava číslelníků -----------------------------------------
+
+# Značení skupin zdravotnického prostředku
+pzt_ciselnik <- readRDS("pzt_ciselnik.rds")
+
+# Značení pojišťoven
+pojistovny_ciselnik <- tibble::tribble(
+  ~kod, ~nazev, ~zkratka,
+  111, "Všeobecná zdravotní pojišťovna (VZP)", "VZP",
+  201, "Vojenská zdravotní pojišťovna (VoZP)", "VoZP",
+  205, "Česká průmyslová zdravotní pojišťovna (ČPZP)", "ČPZP",
+  207, "Oborová zdravotní pojišťovna (OZP)", "OZP",
+  209, "Zaměstnanecká pojišťovna Škoda (ZPŠ)", "ZPŠ",
+  211, "Zdravotní pojišťovna ministerstva vnitra ČR (ZPMV)", "ZPMV",
+  213, "RBP, zdravotní pojišťovna", "RBP"
+)
+  
+# Značení krajů
+kraj_ciselnik <- readRDS("kraje_ciselnik.rds")
+
+# Značení druhu poskytovatele
+ciselnik_druh_poskytovatele <- tribble(
+  ~nrpzs_druh_poskytovatele_kod, ~nrpzs_druh_poskytovatele_nazev,
+  "010", "Sdružení zdravotnických zařízení",
+  "101", "Fakultní nemocnice",
+  "102", "Nemocnice",
+  "103", "Specializovaná nemocnice",
+  "104", "Psychiatrická nemocnice",
+  "105", "Nemocnice následné péče",
+  "110", "Léčebna pro dlouhodobě nemocné (LDN)",
+  "111", "Léčebna tuberkulózy a respiračních nemocí (TRN)",
+  "112", "Psychiatrická léčebna",
+  "113", "Rehabilitační ústav",
+  "119", "Ostatní odborné léčebné ústavy",
+  "122", "Dětská psychiatrická léčebna",
+  "129", "Ostatní dětské odborné léčebné ústavy",
+  "130", "Lázeňská léčebna",
+  "141", "Dětská ozdravovna",
+  "180", "Hospic",
+  "190", "Další lůžkové zařízení",
+  "300", "Sdružení ambulantních zařízení",
+  "301", "Poskytovatel ambulantních služeb (nad 5 oborů)",
+  "302", "Poskytovatel ambulantních služeb (pod 5 oborů)",
+  "305", "Centrum asistované reprodukce",
+  "310", "Zdravotnické středisko",
+  "312", "Zařízení závodní preventivní péče",
+  "320", "Samostatná ordinace všeobecného praktického lékaře",
+  "321", "Samostatná ordinace praktického lékaře pro děti a dorost",
+  "322", "Samostatná ordinace PL - stomatologa",
+  "323", "Samostatná ordinace PL - gynekologa",
+  "324", "Samostatná ordinace lékaře specialisty",
+  "340", "Samostatné zařízení psychologa",
+  "341", "Samostatné zařízení logopeda",
+  "350", "Domácí zdravotní péče",
+  "351", "Samostatné zařízení fyzioterapeuta",
+  "352", "Samostatné zařízení nelékaře - návš.služ.sestry",
+  "354", "Zdravotní péče v ústavech sociální p.",
+  "359", "Samostatné zařízení nelékaře - jiné",
+  "360", "Samostatná stomatologická laboratoř",
+  "361", "Samostatná odborná laboratoř",
+  "362", "Odběrová místnost",
+  "363", "Odběr krevní plasmy",
+  "370", "Samostatná transfuzní stanice",
+  "380", "Zařízení LPS",
+  "389", "Koroner",
+  "390", "Hemodialyzační středisko",
+  "398", "Zařízení pro léčbu závislostí",
+  "399", "Ostatní ambulantní zařízení",
+  "400", "Sdružení dětských zařízení",
+  "410", "Kojenecký ústav",
+  "420", "Dětský domov pro děti do 3 let",
+  "430", "Dětské centrum",
+  "431", "Dětský stacionář",
+  "440", "Jesle",
+  "450", "Další dětské zařízení",
+  "460", "Stacionář",
+  "461", "Psychoterapeutický stacionář",
+  "465", "Krizové centrum",
+  "466", "Centrum duševního zdraví",
+  "476", "Záchytná stanice",
+  "480", "Zdravotnická dopravní služba",
+  "481", "Zdravotnická záchranná služba",
+  "483", "Výjezdová skupina záchranné služby",
+  "484", "Další zařízení záchranné služby",
+  "485", "Přeprava pacientů neodkladné péče",
+  "499", "Ostatní zvláštní zdravotnická zařízení",
+  "501", "Sdružení lékáren",
+  "510", "Lékárna",
+  "521", "Výdejna zdravotnických prostředků",
+  "523", "Oční optika",
+  "530", "Státní ústav pro kontrolu léčiv",
+  "600", "Státní zdravotní ústav",
+  "601", "Krajská hygienická stanice",
+  "605", "Zdravotní ústav",
+  "609", "Další zařízení hygienické služby",
+  "831", "IPVZ",
+  "832", "NCONZO",
+  "900", "Ostatní organizace MZ",
+  "950", "Ostatní zdravotnická zařízení",
+  "961", "Zdravotnické zařízení v likvidaci",
+  "962", "Hospodářská org. neposkyt. zdrav. péči",
+  "963", "Servisní organizace"
+)
+
+# Stažení číselníku IČZ (NR-04-64) – jednou, použito pro druh i název poskytovatele
+nr0464 <- read_delim(
+  "https://data.mzcr.cz/data/distribuce/456/Otevrena-data-NR-04-64-ciselnik-icz-pojistovny-historicke.csv",
+  delim = ",",
+  locale = locale(decimal_mark = "."),
+  show_col_types = FALSE
+) |>
+  rename_with(tolower)
+
+# Značení druhu poskytovatele
+druh_poskytovatele <- nr0464 |>
+  mutate(nrpzs_druh_poskytovatele_kod =
+           as.character(nrpzs_druh_poskytovatele_kod)) |>
+  left_join(ciselnik_druh_poskytovatele, by = "nrpzs_druh_poskytovatele_kod") |>
+  select(icz,
+         nrpzs_druh_poskytovatele_kod,
+         nrpzs_druh_poskytovatele_nazev) |>
+  rename(druh_poskytovatele_kod = 'nrpzs_druh_poskytovatele_kod',
+         druh_poskytovatele_nazev = 'nrpzs_druh_poskytovatele_nazev') |>
+  filter(!is.na(druh_poskytovatele_nazev)) |>
+  distinct(icz, druh_poskytovatele_nazev) |>
+  group_by(icz) |>
+  summarise(
+    druh_poskytovatele_nazev = first(druh_poskytovatele_nazev),
+    .groups = "drop"
+  )
+
+# Značení názvů poskytovatelů
+nazev_poskytovatele <- nr0464 |>
+  select(icz, icz_nazev, ico_nazev) |>
+  mutate(
+    across(
+      c(icz_nazev, ico_nazev),
+      ~ .x |>
+        stringr::str_squish() |>
+        stringr::str_to_lower(locale = "cs") |>
+        stringi::stri_trans_general("Latin-ASCII")
+    )
+  ) |>
+  group_by(icz) |>
+  summarise(
+    icz_nazev = paste(unique(na.omit(icz_nazev)), collapse = "\n"),
+    ico_nazev = paste(unique(na.omit(ico_nazev)), collapse = "\n"),
+    .groups = "drop"
+  )
+
+rm(nr0464)
+```
+
+```{r data-load}
+# --- Stažení datových setů -------------------------------------------------
+
+# Stažení datového souboru pojišťoven
+pojistovny <-
+  read_delim(
+  "https://data.mzcr.cz/data/distribuce/419/Otevrena-data-NR-04-30-zdravotnicke-prostredky-kod-mesic-pojistovna.csv",
+  delim = ",",
+  locale = locale(decimal_mark = "."),
+  show_col_types = FALSE
+) |>
+  rename_with(tolower)
+
+# Stažení datového souboru poskytovatelů
+poskytovatele <-
+  read_delim(
+  "https://data.mzcr.cz/data/distribuce/422/Otevrena-data-NR-04-31-zdravotnicke-prostredky-kod-mesic-icz.csv",
+  delim = ",",
+  locale = locale(decimal_mark = "."),
+  show_col_types = FALSE
+) |>
+  rename_with(tolower)
+```
+
+Z odbornosti předepisujícího pracoviště byly dále odvozeny proměnné **typ péče** (ambulantní vs. lůžková péče) a **agregované skupiny odborností**, které umožňují interpretovat výsledky na vyšší úrovni detailu. Numerické proměnné byly převedeny na odpovídající datové typy.
+
+```{r data-prepare}
+# --- Příprava dat poskytovatelů: -------------------------------------------
+# - výběr období 2020–2024
+# - doplnění krajů a skupin zdravotnických prostředků
+# - vytvoření kategorií typu péče a odborností
+# - převod proměnných na správné datové typy
+data <- poskytovatele |>
+  filter(rok %in% 2020:2024) |>
+  mutate(across(where(is.character), ~na_if(.x, "")),
+         icz = as.character(icz),
+         pzt_typ = as.numeric(pzt_typ)) |> # špatně převedený NAs u stringu
+  left_join(kraj_ciselnik, by = c('okres_predepsani' = 'kod_okres')) |>
+  left_join(pzt_ciselnik, by = c('pzt_typ' = 'kod')) |>
+  rename(pzt_label = 'label') |>
+  mutate(rok = lubridate::year(as.Date.character(rok, format = "%Y")),
+         nazev_kraj = factor(nazev_kraj),
+         kod_kraj = factor(kod_kraj),
+         typ_pece = 
+           case_when(str_detect(odbornost_predepisujici, "^\\d{3}$") ~ 
+                       "ambulantní péče",
+                     str_detect(odbornost_predepisujici, "^\\d[A-Z]\\d$") ~ 
+                       "lůžková péče",
+                     TRUE ~ NA),
+         skupiny_odbornosti =
+           case_when(str_detect(odbornost_predepisujici, "^0\\d{2}$") ~ 
+                       "0 - praktické a zubní lékařství",
+                    str_detect(odbornost_predepisujici, "^1") ~ 
+                      "1 - interní obory",
+                    str_detect(odbornost_predepisujici, "^2") ~ 
+                      "2 - rehabilitace, hematologie, neurologie aj.",
+                    str_detect(odbornost_predepisujici, "^3") ~ 
+                      "3 - pediatrie a psychiatrie",
+                    str_detect(odbornost_predepisujici, "^4") ~ 
+                      "4 - onkologie, dermatologie, radioterapie aj.",
+                    str_detect(odbornost_predepisujici, "^5") ~ 
+                      "5 - chirurgické obory",
+                    str_detect(odbornost_predepisujici, "^6") ~ 
+                      "6 - gynekologie, ortopedie, plastická chirurgie aj.",
+                    str_detect(odbornost_predepisujici, "^7") ~ 
+                      "7 - ORL, oftalmologie, urologie, ARO aj.",
+                    str_detect(odbornost_predepisujici, "^8") ~ 
+                      "8 - laboratoře a diagnostika",
+                    str_detect(odbornost_predepisujici, "^9") ~ 
+                      "9 - nelékařské a ostatní zdravotnické obory",
+                    str_detect(odbornost_predepisujici, "^1[A-Z]\\d$") ~ 
+                      "1 - interní obory",
+                    str_detect(odbornost_predepisujici, "^2[A-Z]\\d$") ~ 
+                      "2 - rehabilitace, neurologie, hematologie aj.",
+                    str_detect(odbornost_predepisujici, "^3[A-Z]\\d$") ~ 
+                      "3 - pediatrie a psychiatrie",
+                    str_detect(odbornost_predepisujici, "^4[A-Z]\\d$") ~ 
+                      "4 - onkologie, dermatologie, radioterapie aj.",
+                    str_detect(odbornost_predepisujici, "^5[A-Z]\\d$") ~ 
+                      "5 - chirurgie",
+                    str_detect(odbornost_predepisujici, "^6[A-Z]\\d$") ~ 
+                      "6 - gynekologie, ortopedie, plastická chirurgie aj.",
+                    str_detect(odbornost_predepisujici, "^7[A-Z]\\d$") ~ 
+                      "7 - ORL, oftalmologie, urologie, ARO aj.",
+                    str_detect(odbornost_predepisujici, "^9[A-Z]\\d$") ~ 
+                      "9 - následná a ošetřovatelská péče",
+                    TRUE ~ NA),
+         mesic_label = factor(mesic, 
+                         labels = c("leden", "únor", "březen", "duben", "květen",
+                                    "červen", "červenec", "srpen", "září", 
+                                    "říjen", "listopad", "prosinec")),
+         icz = as.character(icz),
+         pocet_baleni = as.numeric(pocet_baleni),
+         uhrada_zp = as.numeric(uhrada_zp)
+      )
+
+# --- Příprava dat zdravotních pojišťoven:-----------------------------------
+# - nahrazení prázdných hodnot
+# - doplnění názvů a zkratek pojišťoven
+# - převod numerických proměnných
+pojistovny <- pojistovny |>
+  mutate(across(where(is.character), ~na_if(.x, ""))) |> # špatně převedený NAs u stringu
+  left_join(pojistovny_ciselnik, by = c('pojistovna' = 'kod')) |>
+  rename(pojistovna_label = 'nazev', pojistovna_zkratka = 'zkratka') |>
+  mutate(pocet_baleni = as.numeric(pocet_baleni),
+         uhrada_zp = as.numeric(uhrada_zp))
+```
+
+```{r tbl-zakladni-srovnavaci-tabulka}
+#| echo: false
+#| tbl-cap: "Přehled základních charakteristik datového souboru poskytovatelů."
+# Přehled základních charakteristik datového souboru poskytovatelů
+datasummary_skim(data |> select(rok, mesic, pocet_baleni, uhrada_zp),
+                 type = "numeric")
+```
+
+Datová sada je z hlediska kvality velmi dobře připravená, protože u hlavních sledovaných proměnných **nejsou přítomny chybějící hodnoty**. Obsahuje data za **5 let a všech 12 měsíců v roce**.
+
+Většina záznamů se týká **nižších počtů balení a menších úhrad**, zatímco jen malá část případů dosahuje velmi vysokých hodnot. Typický záznam obsahuje přibližně **4 balení zdravotnických prostředků** a úhradu okolo **1,5 tis. Kč**. Současně se však v datech objevují i extrémní hodnoty – například více než **112 tisíc balení** nebo úhrady přesahující **18,5 mil. Kč**.
+
+To naznačuje, že zdravotnické prostředky jsou hrazeny velmi nerovnoměrně: **velké množství běžných a levnějších prostředků doplňuje menší počet velmi nákladných zdravotnických prostředků**, které výrazně zvyšují celkové výdaje zdravotních pojišťoven.
+
+```{r}
+#| eval: false
+#| include: false
+# Přehled základních charakteristik datového souboru krajů, typu péče
+datasummary_skim(data |> 
+                   select(kod_kraj, typ_pece) |>
+                   mutate(across(c(typ_pece),
+                                 ~ remove_accents(.x))),
+                 type = "categorical", escape = FALSE)
+```
+
+Datová sada nevykazuje závažné problémy s kvalitou dat. Geografické údaje (`okres_predepisujici`) neobsahují chybějící hodnoty. Pouze u proměnné `odbornost_predepisujici` se vyskytuje přibližně **2,2 % chybějících hodnot**, což představuje relativně nízký podíl dat.
+
+# Metodologie
+
+Analýza kombinuje deskriptivní statistiku, grafické metody a vybrané statistické postupy zaměřené na hodnocení růstu, koncentrace a struktury úhrad zdravotnických prostředků. Vedle základních souhrnných ukazatelů jsou využity metody pro rozklad růstu úhrad na cenovou a objemovou složku, měření koncentrace prostředků mezi poskytovateli a plátci, hodnocení vztahů mezi kategoriálními proměnnými a analýzu rozdílů mezi skupinami poskytovatelů.
+
+Následující podkapitoly stručně představují použité metody a ukazatele, které jsou následně aplikovány při interpretaci výsledků.
+
+::: callout-note
+Data představují **úplnou populaci** vykázaných úhrad, nikoli náhodný výběr. Klasické *p*-hodnoty proto mají omezenou interpretaci – při milionech záznamů je prakticky každý rozdíl „statisticky významný". Důraz je proto kladen na **velikosti účinku** (Giniho koeficient, HHI, Cramérovo V, epsilon², rank-biseriální korelace), které kvantifikují *sílu* jevu, nikoli pouze jeho přítomnost.
+:::
+
+## Dekompozice růstu úhrad {#sec-teorie-dekompozice}
+
+Celkové úhrady lze chápat jako součin počtu vykázaných balení a průměrné ceny za balení:
+
+$$
+V = Q \cdot P,
+$$
+
+kde $V$ označuje celkové úhrady, $Q$ počet balení a $P$ průměrnou cenu za balení.
+
+Změna úhrad mezi dvěma obdobími je rozložena pomocí metody LMDI na příspěvek objemu a ceny:
+
+$$
+\Delta V = \Delta V_Q + \Delta V_P.
+$$
+
+Váha dekompozice je dána logaritmickým průměrem: $L(V_1,V_0) = \frac{V_1 - V_0}{\ln V_1 - \ln V_0}.$
+
+Příspěvek změny objemu je $\Delta V_Q = L(V_1,V_0) \cdot \ln\left(\frac{Q_1}{Q_0}\right)$
+
+a příspěvek změny ceny $\Delta V_P = L(V_1,V_0) \cdot \ln\left(\frac{P_1}{P_0}\right).$
+
+Tento postup umožňuje přesně rozdělit celkový nárůst úhrad na část způsobenou vyšším objemem vykázaných prostředků a část způsobenou růstem průměrné ceny.
+
+```{r}
+#| eval: false
+#| code-fold: false
+# --- Logaritmický průměr (váha v LMDI dekompozici) -------------------------
+# Pro a == b vrací a (limitní hodnota), jinak (a - b) / (log a - log b).
+log_mean <- function(a, b) {
+  ifelse(a == b, a, (a - b) / (log(a) - log(b)))
+}
+
+# --- LMDI dekompozice dvoufaktorového součinu V = Q * P --------------------
+# Rozkládá změnu hodnoty V mezi dvěma obdobími na příspěvek objemu (Q)
+# a příspěvek ceny (P). Příspěvky jsou aditivní: d_total = d_volume + d_price.
+#   V0, V1 – hodnota (úhrada) na začátku a na konci období
+#   Q0, Q1 – objem (počet balení)
+#   P0, P1 – cena na jednotku (úhrada / balení)
+lmdi_2f <- function(V0, V1, Q0, Q1, P0, P1) {
+  L <- log_mean(V1, V0)
+  list(
+    d_total  = V1 - V0,
+    d_volume = L * log(Q1 / Q0),
+    d_price  = L * log(P1 / P0)
+  )
+}
+```
+
+## Koncentrace úhrad {#sec-teorie-gini-hhi}
+
+Koncentrace úhrad mezi poskytovateli je hodnocena pomocí **Giniho koeficientu**. Ten nabývá hodnot od 0 do 1, kde 0 znamená zcela rovnoměrné rozdělení a 1 maximální koncentraci.
+
+$$
+G =
+\frac{
+\sum_{i=1}^{n}\sum_{j=1}^{n} |x_i - x_j|
+}{
+2n^2\bar{x}
+},
+$$
+
+kde $x_i$ představuje úhradu poskytovatele $i$, $n$ počet poskytovatelů a $\bar{x}$ průměrnou úhradu.
+
+```{r}
+#| eval: false
+#| code-fold: false
+# --- Giniho koeficient -----------------------------------------------------
+# Míra nerovnoměrnosti rozdělení (0 = dokonalá rovnost, 1 = maximální
+# koncentrace). Vstupem je vektor nezáporných hodnot.
+gini <- function(x) {
+  x <- sort(x[!is.na(x)])
+  n <- length(x)
+  if (n == 0 || sum(x) == 0) return(NA_real_)
+  i <- seq_len(n)
+  (2 * sum(i * x)) / (n * sum(x)) - (n + 1) / n
+}
+
+# --- Bootstrapový interval spolehlivosti pro Giniho koeficient -------------
+# Neparametrický percentilový interval z R bootstrapových výběrů.
+gini_bootstrap_ci <- function(x, R = 1000, conf = 0.95, seed = 42) {
+  x <- x[!is.na(x)]
+  if (length(x) < 2) return(c(lwr = NA_real_, upr = NA_real_))
+  set.seed(seed)
+  boot <- replicate(R, gini(sample(x, replace = TRUE)))
+  alpha <- (1 - conf) / 2
+  out <- stats::quantile(boot, c(alpha, 1 - alpha), na.rm = TRUE)
+  c(lwr = unname(out[1]), upr = unname(out[2]))
+}
+```
+
+Koncentrace podle vybraných skupin je doplněna **Herfindahlovým–Hirschmanovým indexem**:
+
+$$
+HHI = \sum_{i=1}^{n} s_i^2,
+$$
+
+kde $s_i$ je podíl subjektu $i$ na celkových úhradách; čím vyšší je jeho hodnota, tím více jsou úhrady soustředěny do menšího počtu subjektů. Z HHI lze odvodit **efektivní počet těchto velkých subjektů** : $N_{\text{eff}} = \frac{1}{HHI}$
+
+```{r}
+#| eval: false
+#| code-fold: false
+# --- Herfindahlův–Hirschmanův index (HHI) ----------------------------------
+# Míra koncentrace trhu. Vstupem jsou podíly nebo absolutní hodnoty
+# (ty se na podíly přepočítají). Vrací HHI na škále 0–1 a efektivní
+# počet subjektů (1 / HHI).
+#   x             – vektor hodnot nebo podílů
+#   already_shares – TRUE, pokud x už jsou podíly (součet 1)
+hhi <- function(x, already_shares = FALSE) {
+  x <- x[!is.na(x)]
+  shares <- if (already_shares) x else x / sum(x)
+  h <- sum(shares^2)
+  c(hhi = h, eff_n = 1 / h)
+}
+
+```
+
+## Neparametrické testování rozdílů mezi skupinami {#sec-teorie-chitest}
+
+Pro porovnání dvou skupin, například ambulantní a lůžkové péče, je použit **Mannův–Whitneyho test**. Test porovnává rozdělení hodnot mezi dvěma nezávislými skupinami. Pokud mají skupiny podobný tvar rozdělení, lze jej interpretovat jako test rozdílu mediánů. Síla rozdílu je vyjádřena pomocí **rank-biseriální korelací**: $r_{rb} = 1 - \frac{2U}{n_1 n_2},$ kde $U$ je Mann–Whitneyho statistika a $n_1,$ $n_2$ jsou počty pozorování v jednotlivých skupinách.
+
+```{r}
+#| eval: false
+#| code-fold: false
+# --- Mannův–Whitneyho test a rank-biseriální korelace ----------------------
+
+# Porovnání rozdělení úhrad mezi ambulantní a lůžkovou péčí
+wilcox.test(uhrada ~ typ_pece, data = data)
+
+# Velikost efektu vyjádřená rank-biseriální korelací
+rank_biserial(data$uhrada, data$typ_pece)
+```
+
+Rozdíly v úhradách mezi více skupinami poskytovatelů jsou testovány **Kruskalovým–Wallisovým testem**, který představuje zobecnění Mannova–Whitneyho testu pro více než dvě nezávislé skupiny. Velikost účinku je vyjádřena pomocí epsilon kvadrátu $\varepsilon^2 = \frac{H - k + 1}{n - k},$ kde $H$ je testová statistika, $k$ počet skupin a $n$ počet pozorování.
+
+```{r}
+#| eval: false
+#| code-fold: false
+# --- Kruskalův–Wallisův test rozdílů mezi skupinami odborností -------------
+
+# Porovnání rozdělení úhrad mezi různé skupiny odborností
+kw <- kruskal.test(uhrada ~ skupiny_odbornosti, data = data)
+
+# Velikost efektu vyjádřená epsilon kvadrátem
+epsilon_squared(as.numeric(kw$statistic), nrow(data))
+```
+
+## Trend v čase {#sec-teorie-monotonie}
+
+Monotónní trend úhrad v čase je ověřen **Mann–Kendallovým testem**. Ten hodnotí, zda mají hodnoty v časové řadě systematicky rostoucí nebo klesající tendenci. Test je založen na Kendallově korelaci pořadí:
+
+$$
+\tau =
+\frac{C - D}{\frac{1}{2}n(n-1)},
+$$
+
+kde $C$ je počet souhlasných dvojic, $D$ počet nesouhlasných dvojic a $n$ počet pozorování. Tento test je vhodný zejména pro situace, kdy není nutné předpokládat normalitu dat a kdy nás zajímá směr dlouhodobého trendu.
+
+```{r}
+#| eval: false
+#| code-fold: false
+# --- Ověření monotónního trendu pomocí Kendallovy pořadové korelace --------
+# (neparametrická alternativa vhodná pro časové řady s odlehlými hodnotami)
+cor.test(x, y, method = "kendall")
+```
+
+# Dlouhodobý růst úhrad zdravotnických prostředků
+
+## Úhrady dlouhodobě rostou navzdory sezónním výkyvům
+
+```{r fig-mesice}
+#| echo: false
+#| fig-cap: "Měsíční vývoj úhrad od zdravotních pojišťoven v letech 2020–2024."
+# Agregace měsíčních úhrad podle roku a měsíce
+p_mesice <- data |> 
+  group_by(rok, mesic, mesic_label) |> 
+  summarise(
+    uhrada_zp = sum(uhrada_zp, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  
+  # Sezónní průběh úhrad po jednotlivých letech
+  ggplot(aes(
+    y = uhrada_zp,
+    x = mesic_label,
+    color = factor(rok),
+    group = rok,
+
+    # Tooltip pro interaktivní graf
+    text = 
+           paste0("Měsíc: ", mesic_label, "<br>",
+                  "Úhrada ZP: ",
+                  scales::number(uhrada_zp, scale = 1e-9,
+                  suffix = " mld. Kč", accuracy = 0.01, 
+                  big.mark = " ", decimal.mark = ","), "<br>",
+                  "Rok: ", rok)
+      )
+    ) +
+  geom_line() +
+  scale_color_manual(values = barvy) +
+  labs(x = 'Měsíc', y = 'Celková úhrada od zdravotních pojišťoven', color = '') +
+  scale_y_continuous(limits = c(0, NA), 
+                     labels = 
+                       label_number(scale = 1e-9, suffix = " mld. Kč", 
+                                    accuracy = 0.1, big.mark = " ", 
+                                    decimal.mark = ","),
+                     breaks = seq(0, 3e9, by = 5e8)) +
+  guides(x = guide_axis(cap = "both"),
+         y = guide_axis(cap = "upper")) +
+  theme(axis.text.x = element_text(angle = 40, hjust = 1, 
+                                   vjust = 1, color = "black"),
+        axis.ticks.x = element_line(color = "black"),
+        axis.line.x = element_line(color = "black"),
+        # axis.text.y = element_text(color = NA),
+        # axis.ticks.y = element_line(color = NA),
+        # axis.line.y = element_line(color = NA),
+        axis.title.y = element_text(margin = margin(r = 10), color = "black"),
+        panel.grid.minor = element_line(color = "transparent"),
+        panel.grid.major.y = element_line(color = "transparent"))
+
+# Interaktivní graf
+pl(p_mesice, tooltip = "text")
+```
+
+Ve všech sledovaných letech je patrný podobný **sezónní průběh**, kdy nejnižší úhrady bývají zpravidla v letních měsících, zejména v červenci a srpnu, zatímco vyšší hodnoty se objevují na podzim, především v říjnu a listopadu. Zároveň je patrný **postupný meziroční růst úhrad**, přičemž rok 2024 dosahuje téměř ve všech měsících nejvyšších hodnot ze všech sledovaných let. Pandemie COVID-19 přitom výrazně nenarušila celkový trend vývoje úhrad zdravotnických prostředků, protože napříč sledovanými lety pokračuje **postupný každoroční růst celkových úhrad**.
+
+```{r}
+#| eval: false
+#| include: false
+# Vývoj celkových úhrad zdravotnických prostředků po letech
+data |> 
+    group_by(rok) |> 
+    summarise(
+        uhrada_zp = sum(uhrada_zp, na.rm = TRUE),
+        .groups = "drop"
+    ) |>
+    arrange(rok) |>
+    mutate(
+        diff_abs = uhrada_zp - lag(uhrada_zp),
+        diff_rel = (uhrada_zp / lag(uhrada_zp) - 1),
+        diff_rel_label = scales::percent(
+            diff_rel,
+            accuracy = 0.1,
+            decimal.mark = ","
+        )
+    )
+
+# # A tibble: 5 x 5
+#     rok    uhrada_zp    diff_abs diff_rel diff_rel_label
+#   <dbl>        <dbl>       <dbl>    <dbl> <chr>         
+# 1  2020 20318144811.         NA   NA      NA            
+# 2  2021 22215854913. 1897710102.   0.0934 9,3%          
+# 3  2022 25653864639. 3438009726.   0.155  15,5%         
+# 4  2023 28884352589. 3230487950.   0.126  12,6%         
+# 5  2024 31119062941. 2234710351.   0.0774 7,7%     
+
+# Vývoj celkového počtu vydaných balení po letech
+data |> 
+    group_by(rok) |> 
+    summarise(
+        pocet_baleni = sum(pocet_baleni, na.rm = TRUE),
+        .groups = "drop"
+    ) |>
+    arrange(rok) |>
+    mutate(
+        diff_abs = pocet_baleni - lag(pocet_baleni),
+        diff_rel = (pocet_baleni / lag(pocet_baleni) - 1),
+        diff_rel_label = scales::percent(
+            diff_rel,
+            accuracy = 0.1,
+            decimal.mark = ","
+        )
+    )
+
+# # A tibble: 5 x 5
+#     rok pocet_baleni diff_abs diff_rel diff_rel_label
+#   <dbl>        <dbl>    <dbl>    <dbl> <chr>         
+# 1  2020    23710255.      NA   NA      NA            
+# 2  2021    24590734.  880479.   0.0371 3,7%          
+# 3  2022    25773524. 1182790.   0.0481 4,8%          
+# 4  2023    27286053. 1512529.   0.0587 5,9%          
+# 5  2024    28890895. 1604842.   0.0588 5,9% 
+```
+
+**Celkové úhrady zdravotních pojišťoven meziročně rostly přibližně o 8–16 % ročně**, přičemž nejvyšší růst byl zaznamenán v roce 2022. Současně se každoročně zvyšoval i **počet vydaných balení zdravotnických prostředků**, a to přibližně o **4–6 % ročně**. To naznačuje, že lidé postupně využívají více zdravotnických prostředků a zároveň rostou i náklady na jejich úhradu.
+
+Tento vývoj může souviset jak se sezónností zdravotní péče, tak s **dlouhodobým růstem objemu poskytovaných zdravotnických prostředků a jejich cen**. Pro přesnější interpretaci by však bylo vhodné doplnit analýzu také o **vliv inflace**, protože část pozorovaného růstu může být způsobena růstem cen zdravotnických prostředků a obecnou cenovou hladinou, nikoli pouze zvýšením objemu poskytované péče.
+
+```{r calculation-kendall-all}
+#| code-fold: false
+# --- Trend v čase (Mann-Kendall, měsíční řada) -----------------------------
+
+# Agregace celkových měsíčních úhrad do časové řady
+ts_mesic <- data |>
+  group_by(rok, mesic) |>
+  summarise(uhrada = sum(uhrada_zp, na.rm = TRUE), .groups = "drop") |>
+  arrange(rok, mesic) |>
+  
+  # vytvoření časového indexu
+  mutate(t = row_number())
+
+# Ověření monotónního trendu úhrad v čase pomocí
+# Kendallovy pořadové korelace mezi časem a úhradami
+mk <- suppressWarnings(
+  cor.test(ts_mesic$t, ts_mesic$uhrada, method = "kendall")
+)
+```
+
+Dlouhodobý růst úhrad potvrzuje **Mann–Kendallův test** monotónního trendu, aplikovaný na měsíční řadu celkových úhrad (`r nrow(ts_mesic)` měsíců). Test prokazuje silný rostoucí trend (Kendallovo τ = `r scales::number(as.numeric(mk$estimate), accuracy = 0.01, decimal.mark = ",")`, *p* `r format_p(mk$p.value)`), což odpovídá vizuálně patrnému meziročnímu nárůstu i přes výraznou sezónnost.
+
+## Růst úhrad je tažen především vyšším objemem
+
+Celkové úhrady zdravotnických prostředků mohou růst ze dvou hlavních důvodů: zvyšuje se počet vykázaných balení (**objem**), nebo roste úhrada za jedno balení (**cena**). Pro oddělení vlivu těchto dvou faktorů byla použita logaritmická dekompozice indexů (LMDI, viz metodologie @sec-teorie-dekompozice), která umožňuje přesně vyčíslit příspěvek každé složky k celkové změně úhrad.
+
+```{r calculation-lmdi}
+#| code-fold: false
+# --- Dekompozice objem vs. cena --------------------------------------------
+
+# Roční agregace úhrad a počtu balení
+rocni <- data |>
+  group_by(rok) |>
+  summarise(
+    uhrada = sum(uhrada_zp, na.rm = TRUE),
+    baleni = sum(pocet_baleni, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(rok) |>
+  
+  # Průměrná úhrada na jedno balení
+  mutate(cena = uhrada / baleni)
+
+# Meziroční LMDI dekompozice příspěvku objemu a ceny
+rocni_lmdi <- rocni |>
+  mutate(
+    
+    # Hodnoty z předchozího roku
+    V0 = lag(uhrada), Q0 = lag(baleni), P0 = lag(cena),
+    
+    # Logaritmický průměr jako váha LMDI rozkladu
+    L_w      = log_mean(uhrada, V0),
+    
+    # Absolutní příspěvek změny objemu a ceny
+    d_volume = L_w * log(baleni / Q0),
+    d_price  = L_w * log(cena / P0),
+    
+    # Celková absolutní meziroční změna úhrad
+    d_total  = uhrada - V0,
+    
+    # Relativní meziroční příspěvky v %
+    # Úhrada = balení × cena, proto se log-změny přesně sčítají)
+    pct_volume = log(baleni / Q0) * 100,
+    pct_price  = log(cena / P0) * 100,
+    pct_total  = log(uhrada / V0) * 100
+  ) |>
+      
+  # První rok nemá předchozí hodnotu pro srovnání
+  filter(!is.na(V0))
+```
+
+```{r fig-lmdi}
+#| echo: false
+#| warning: false
+#| fig-cap: "Meziroční tempo růstu úhrad rozložené na příspěvek objemu (počtu balení) a ceny za balení. Tečka = celková meziroční změna úhrad."
+#| out-width: 90%
+# Převod širokého výstupu LMDI na dlouhý formát pro ggplot
+lmdi_long <- rocni_lmdi |>
+  select(rok, pct_volume, pct_price, d_volume, d_price) |>
+  
+  # Rozdělení názvů sloupců na:
+  # - hodnotu (pct / d)
+  # - typ složky (volume / price)
+  tidyr::pivot_longer(
+    cols = c(pct_volume, pct_price, d_volume, d_price),
+    names_to = c(".value", "slozka"),
+    names_pattern = "(pct|d)_(volume|price)"
+  ) |>
+  mutate(slozka = recode(slozka, volume = "Objem", price = "Cena"))
+
+# Sloupcový graf rozkladu meziroční změny úhrad
+p_lmdi <- lmdi_long |>
+  ggplot(aes(
+    x = factor(rok), y = pct, fill = slozka,
+    
+    # Tooltip pro interaktivní graf
+    text = paste0(
+      "Složka: ", slozka, "<br>",
+      "Příspěvek: ",
+      scales::number(d, scale = 1e-9, suffix = " mld. Kč",
+        accuracy = 0.01, big.mark = " ", decimal.mark = ","),
+      " (", scales::number(pct, accuracy = 0.1, decimal.mark = ","), " %)<br>",
+      "Rok: ", rok
+    )
+  )) +
+  
+  # Příspěvek cenové a objemové složky
+  geom_col(width = 0.5) +
+  
+  # Referenční nulová linie
+  geom_hline(yintercept = 0, linewidth = 0.3, color = "gray40") +
+  
+  # Linie a body celkové meziroční změny
+  geom_line(data = rocni_lmdi, inherit.aes = FALSE,
+            aes(x = factor(rok), y = pct_total, group = 1,
+                color = "Celková změna")) +
+  geom_point(data = rocni_lmdi, inherit.aes = FALSE,
+             aes(x = factor(rok), y = pct_total, group = 1,
+                 color = "Celková změna",
+                 
+                 # Tooltip pro interaktivní graf
+                 text = paste0("Celková změna: ",
+                   scales::number(d_total, scale = 1e-9, suffix = " mld. Kč",
+                     accuracy = 0.01, big.mark = " ", decimal.mark = ","), " (", 
+                   scales::number(pct_total, accuracy = 0.1, decimal.mark = ","),
+                   " %)<br>Rok: ", rok)),
+             size = 1.8) +
+  scale_fill_manual(values = barvy[c(5, 2)], name = NULL) +
+  scale_color_manual(values = c("Celková změna" = "#222222"), name = NULL) +
+  
+  # Pořadí legend
+  guides(fill  = guide_legend(order = 1),
+         color = guide_legend(order = 2,
+                              override.aes = list(size = 2, linetype = 1))) +
+  
+  # Osa Y v procentech
+  scale_y_continuous(labels = scales::label_percent(scale = 1, accuracy = 1,
+                                                    suffix = " %"),
+                     breaks = seq(0, 100, by = 2)
+                     ) +
+  labs(x = "Rok", y = "Meziroční změna úhrad") +
+  theme(panel.grid.minor = element_blank())
+
+# Převod ggplotu na interaktivní plotly graf
+p_lmdi_ly <- ggplotly(p_lmdi, tooltip = "text")
+
+# Úprava názvů stop a legendy po převodu do plotly
+for (i in seq_along(p_lmdi_ly$x$data)) {
+  nm <- p_lmdi_ly$x$data[[i]]$name
+  if (!is.null(nm) && nzchar(nm)) {
+    
+    # Odstranění automaticky přidaných indexů "(Objem, 1)"
+    clean <- gsub("^\\((.+),\\s*\\d+\\)$", "\\1", nm)   # "(Objem, 1)" -> "Objem"
+    
+    # Linie bude v legendě zobrazena jako line+marker
+    p_lmdi_ly$x$data[[i]]$name <- clean
+    if (clean == "Celková změna") {
+      if (identical(p_lmdi_ly$x$data[[i]]$mode, "lines")) {
+        # linka v legendě dostane i bod
+        p_lmdi_ly$x$data[[i]]$mode <- "lines+markers"
+        
+        # Hover zajistí bodová vrstva
+        p_lmdi_ly$x$data[[i]]$hoverinfo <- "skip"
+      } else {
+        # duplicitní bodový trace skryjeme z legendy (ponecháme hover)
+        p_lmdi_ly$x$data[[i]]$showlegend <- FALSE
+      }
+    }
+  }
+}
+
+# Vycentrování grafu a úprava ovládací lišty Plotly
+htmltools::div(
+  style = "margin-left:auto; margin-right:auto;",
+p_lmdi_ly |>
+  config(displayModeBar = TRUE, displaylogo = FALSE,
+         modeBarButtonsToRemove = c("pan2d", "select2d", "lasso2d",
+           "hoverClosestCartesian", "hoverCompareCartesian", "toggleSpikelines"))
+)
+```
+
+```{r realna-cena}
+# CPI index (ČSÚ – průměrná roční míra inflace), 2020 = 100
+cpi <- tibble::tibble(
+  rok       = 2020:2024,
+  cpi_index = c(100, 103.8, 119.5, 132.3, 136.0)
+)
+
+# Celková LMDI dekompozice změny mezi prvním a posledním rokem
+r0  <- rocni |> filter(rok == min(rok))
+r1  <- rocni |> filter(rok == max(rok))
+
+# Rozklad celkové změny úhrad na objemovou a cenovou složku dle vlastní funkce
+dec <- lmdi_2f(r0$uhrada, r1$uhrada, 
+               r0$baleni, r1$baleni, 
+               r0$cena, r1$cena)
+
+# Podíl objemové a cenové složky na celkové změně úhrad
+share_volume <- dec$d_volume / dec$d_total
+share_price  <- dec$d_price  / dec$d_total
+
+# Nominální vs. reálná cena za balení
+cpi_end  <- cpi$cpi_index[cpi$rok == max(rocni$rok)] / 100
+
+# Nominální růst ceny za balení mezi prvním a posledním rokem
+g_nom    <- r1$cena / r0$cena - 1
+
+# Reálný růst ceny po očištění o kumulovanou inflaci
+g_real   <- (r1$cena / cpi_end) / r0$cena - 1
+
+# Kumulovaná inflace mezi základním a posledním rokem
+inflace_kum <- cpi_end - 1
+```
+
+Z celkového nárůstu úhrad o `r scales::number(dec$d_total, scale = 1e-9, suffix = " mld. Kč", accuracy = 0.1, decimal.mark = ",")` mezi roky `r min(rocni$rok)` a `r max(rocni$rok)` lze přibližně **`r scales::percent(share_volume, accuracy = 0.1, decimal.mark = ",", suffix = " %")`**`připsat` **na růst objemu** vykázaných balení a **`r scales::percent(share_price, accuracy = 0.1, decimal.mark = ",", suffix = " %")` růstu ceny** za jedno balení. Graf ukazuje postupné zpomalování růstu úhrad – klesají jak absolutní, tak relativní přírůstky z téměř 15 % v roce 2022 na přibližně 7,5 % v roce 2024. Zároveň dochází k přesunu od cenově taženého růstu k růstu založenému především na vyšším objemu vykázaných balení.
+
+#### Vliv inflace
+
+Průměrná nominální úhrada na jedno balení vzrostla mezi lety `r min(rocni$rok)` a `r max(rocni$rok)` o **`r scales::percent(g_nom, accuracy = 0.1, decimal.mark = ",", suffix = " %")`**. Ve stejném období však kumulativní dosáhla přibližně **`r scales::percent(inflace_kum, accuracy = 0.1, decimal.mark = ",", suffix = " %")`** podle údajů ČSÚ. Po přepočtu do stálých cen tak reálná úhrada na balení ve skutečnosti **poklesla o `r scales::percent(g_real, accuracy = 0.1, decimal.mark = ",", suffix = " %")`**. Výsledky naznačují, že růst celkových úhrad byl tažen především vyšším počtem vykázaných balení, zatímco růst nominálních cen z velké části odrážel obecný inflační vývoj v ekonomice.
+
+# Koncentrace úhrad do velkých regionálních center
+
+```{r fig-kraje-sf}
+#| eval: false
+#| fig-cap: "Regionální podíl na celkových úhradách zdravotních pojišťoven."
+
+library(sf)
+# library(rnaturalearth)
+# library(rnaturalearthdata)
+
+# Součet úhrad podle krajů
+mapa_data <- data |>
+  filter(!is.na(kod_kraj)) |>
+  group_by(kod_kraj) |>
+  summarise(
+    uhrada_zp = sum(uhrada_zp, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  mutate(
+    podil_CR = uhrada_zp / sum(uhrada_zp),
+    podil_label = scales::percent(
+      podil_CR,
+      accuracy = 0.1,
+      decimal.mark = ","
+    )
+  )
+
+# Mapa ČR
+kraje_sf <- RCzechia::kraje()
+
+# Spojení mapy a dat
+mapa_sf <- kraje_sf |>
+  left_join(
+    mapa_data,
+    by = c("KOD_CZNUTS3" = "kod_kraj")
+  ) |>
+  sf::st_transform(5514)
+
+# Interaktivní graf
+ggplot(mapa_sf) +
+  geom_sf(aes(fill = podil_CR), color = "white") +
+  geom_sf_text(
+    aes(label = podil_label),
+    size = 3
+  ) +
+  scale_fill_gradient(
+    low = "#dbe9f6",
+    high = "#007B3DFF",
+    labels = scales::label_percent(
+      accuracy = 0.1,
+      decimal.mark = ","
+    )
+  ) +
+  labs(
+    title = "",
+    fill = "Podíl na ČR"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    axis.title = element_blank(),
+    panel.grid = element_blank()
+  )
+```
+
+```{r fig-kraje-leaflet}
+#| echo: false
+#| message: false
+#| warning: false
+#| fig-cap: "Regionální podíl na celkových úhradách zdravotních pojišťoven."
+
+# Nastení potřebných balíčků
+library(sf)
+library(leaflet)
+library(htmlwidgets)
+
+# Součet úhrad podle krajů
+mapa_data <- data |>
+  filter(!is.na(kod_kraj)) |>
+  group_by(kod_kraj) |>
+  summarise(
+    uhrada_zp = sum(uhrada_zp, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  mutate(
+    podil_CR = uhrada_zp / sum(uhrada_zp),
+    podil_label = scales::percent(
+      podil_CR,
+      accuracy = 0.1,
+      decimal.mark = ",",
+      suffix = " %"
+    )
+  )
+
+# Mapa ČR
+kraje_sf <- RCzechia::kraje()
+
+# Spojení mapy a dat
+mapa_sf <- kraje_sf |>
+  left_join(
+    mapa_data,
+    by = c("KOD_CZNUTS3" = "kod_kraj")
+  ) |>
+  sf::st_transform(5514)
+
+# Leaflet potřebuje WGS84
+mapa_sf_wgs <- mapa_sf |> sf::st_transform(4326)
+
+# Barevná škála
+pal <- colorNumeric(
+  palette = c("#dbe9f6", "#007B3DFF"),
+  domain = mapa_sf_wgs$podil_CR
+)
+
+# Souřadnice středů krajů pro umístění popisků v mapě
+centroids <- mapa_sf_wgs |> sf::st_centroid()
+
+# Hodnoty pro legendu podílu na ČR
+breaks_podil <- seq(0.05, 0.25, by = 0.05)
+
+leaflet(mapa_sf_wgs) |>
+  # Vykreslení krajů podle podílu na celkových úhradách ČR
+  addPolygons(
+    fillColor   = ~pal(podil_CR),
+    fillOpacity = 0.85,
+    color       = "white",
+    weight      = 1.5,
+    
+    # Tooltip při najetí myší na kraj
+    label = ~lapply(paste0(
+      "<b>", NAZ_CZNUTS3, "</b><br>",
+      "Podíl na ČR: ", podil_label, "<br>",
+      "Úhrada ZP: ", scales::number(uhrada_zp, scale = 1e-9,
+        suffix = " mld. Kč", accuracy = 0.01,
+        big.mark = " ", decimal.mark = ",")
+    ), htmltools::HTML),
+    labelOptions = labelOptions(
+      style     = list("font-size" = "13px"),
+      direction = "auto"
+    ),
+    
+    # Zvýraznění kraje při najetí myší
+    highlightOptions = highlightOptions(
+      weight = 3, color = "#555",
+      fillOpacity = 1, bringToFront = TRUE
+    )
+  ) |>
+
+  # Trvalé textové popisky podílů uvnitř krajů
+  addLabelOnlyMarkers(
+    data = centroids,
+    label = ~podil_label,
+    labelOptions = labelOptions(
+      permanent  = TRUE,
+      noHide     = TRUE,
+      direction  = "center",
+      textOnly   = TRUE,
+      style      = list("font-size" = "11px",
+                        "color" = "black")
+    )
+  ) |>
+  
+  # Výchozí pohled na Českou republiku
+  setView(lng = 15.5, lat = 49.8, zoom = 7) |>
+  
+  # Legenda barevné škály
+  addLegend(
+    colors   = pal(breaks_podil),
+    labels   = scales::percent(breaks_podil, accuracy = 1, 
+                               decimal.mark = ",", suffix = " %"),
+    title    = "Podíl na ČR",
+    position = "bottomright",
+    opacity  = 0.85
+  ) |>
+  
+  # Nastavení průhledného pozadí mapového widgetu
+  htmlwidgets::onRender("
+    function(el, x) {
+      el.style.background = 'transparent';
+      el.querySelector('.leaflet-container').style.background = 'transparent';
+    }
+  ")
+```
+
+Nejvyšší podíl na celkových úhradách zdravotnických prostředků připadá na **Prahu (30,6 %)**, která výrazně převyšuje ostatní kraje. Vyšší podíl vykazují také **Jihomoravský kraj (12,4 %)** a **Moravskoslezský kraj (10,5 %)**. Naopak nejnižší podíly mají **Karlovarský kraj (1,7 %)**, Pardubický kraj (2,7 %) a kraj Vysočina (2,8 %).
+
+Rozložení úhrad pravděpodobně souvisí zejména s velikostí populace a koncentrací velkých nemocnic, specializovaných zdravotnických pracovišť ve velkých krajských centrech a lékařských fakult ve velkých krajských centrech.
+
+# Většina prostředků končí u relativně malého počtu poskytovatelů
+
+```{r poskytovatele-prep}
+#| echo: false
+# Agregace úhrad a počtu balení na úroveň poskytovatele
+poskytovatele_agg <- data |>   
+  filter(!is.na(icz)) |>   
+  group_by(icz) |>   
+  summarise(     
+    uhrada_zp = sum(uhrada_zp, na.rm = TRUE),     
+    pocet_baleni = sum(pocet_baleni, na.rm = TRUE), .groups = "drop") |>
+  
+  # Seřazení podle úhrad a výpočet kumulativního podílu
+  arrange(desc(uhrada_zp)) |>   
+  mutate(poradi = row_number(), 
+         podil = uhrada_zp / sum(uhrada_zp),     
+         podil_kum  = cumsum(podil),     
+         poradi_pct = poradi / n() * 100)
+
+# Počet poskytovatelů potřebných k dosažení vybraných podílů úhrad
+n_total <- nrow(poskytovatele_agg) 
+n_50 <- sum(poskytovatele_agg$podil_kum < 0.50) + 1
+n_80 <- sum(poskytovatele_agg$podil_kum < 0.80) + 1 
+n_95 <- sum(poskytovatele_agg$podil_kum < 0.95) + 1
+```
+
+Data umožňují sledovat úhrady na úrovni jednotlivých poskytovatelů zdravotních služeb identifikovaných prostřednictvím IČZ. V datové sadě figuruje celkem **`r scales::number(n_total, big.mark = " ")` poskytovatelů** s nenulovou úhradou.
+
+```{r}
+#| eval: false
+#| include: false
+# Přehled 25 poskytovatelů s nejvyššími úhradami
+poskytovatele_agg |> 
+  arrange(poradi) |>
+  slice(1:25) |>
+  left_join(nazev_poskytovatele, by = 'ICZ') |>
+  select(-c(poradi, poradi_pct, ICZ_nazev)) |>
+  mutate(
+    ICO_nazev = case_when(
+      ICZ == "5002000" ~ "vseobecna zdravoti pojistorvna",
+      ICZ == "4002000" ~ "institut klinicke a experimentalni mediciny v praze",
+      ICZ == "5004000" ~ "fakultni nemocnice motol a homolka",
+      ICZ == "2004000" ~ "vseobecna fakultni nemocnice v praze",
+      ICZ == "6051000" ~ "vojenska fakultni nemocnice praha",
+      ICZ == "8006000" ~ "fakultni nemocnice bulovka",
+      TRUE ~ ICO_nazev
+      )
+    ) |>
+    View()
+```
+
+Úhrady jsou přitom výrazně koncentrované. Polovinu všech výdajů čerpá pouze **`r n_50` poskytovatelů**, tedy zhruba (`r scales::percent(n_50/n_total, accuracy = 0.1, decimal.mark = ",")`) ze všech poskytovatelů. Pro dosažení 80 % úhrad stačí `r scales::number(n_80, big.mark = " ")` poskytovatelů a 95 % úhrad pokrývá `r scales::number(n_95, big.mark = " ")` poskytovatelů. Žebříčku největších příjemců dominuje Všeobecná zdravotní pojišťovna. Zbývající místa jsou obsazena převážně fakultními a krajskými nemocnicemi, doplněnými o IKEM (Institut klinické a experimentální medicíny).
+
+```{r fig-koncentrace-poskytovatele}
+#| echo: false
+#| fig-cap: "Koncentrační křivka úhrad zdravotnických prostředků podle poskytovatelů (2020–2024)."
+#| fig-width: 4.5
+#| fig-height: 4.5
+p_konc <- poskytovatele_agg |>
+  
+  # Koncentrační křivka úhrad podle poskytovatelů 
+  ggplot(aes(x = poradi_pct,
+             y = podil_kum * 100,
+             
+             # Tooltip pro interaktivní graf
+             text = 
+               paste0("Top ", scales::number(poradi, big.mark = " "), 
+                      " poskytovatelů (",
+                      round(poradi_pct, 1), " %)\n",
+                      "Kumulativní podíl úhrad: ", 
+                      scales::percent(podil_kum, accuracy = 0.1,
+                                      decimal.mark = ",", suffix = " %")
+                      ),
+             group = 1)
+  ) +   
+  geom_line(color = barvy[5], linewidth = 0.8) +   
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray60") +  
+  geom_hline(yintercept = c(50, 80, 95), linetype = "dotted", color = "#F39200") + 
+  annotate("text", x = 105, y = c(52, 82, 97),
+           label = c("50 %", "80 %", "95 %"),
+           color = "#F39200", size = 3) +
+  scale_x_continuous(labels = scales::label_percent(
+                        scale = 1, accuracy = 1, suffix = " %"),
+                     breaks = seq(0, 100, by = 20)) +
+  scale_y_continuous(labels = scales::label_percent(
+                         scale = 1, accuracy = 1, suffix = " %"),                      breaks = seq(0, 100, by = 20)) +
+  coord_equal() +
+  labs(x = "Kumulativní podíl poskytovatelů",
+       y = "Kumulativní podíl úhrad") +
+  theme(panel.grid.minor = element_blank())
+
+# Interaktivní graf
+htmltools::div(
+  style = "max-width:560px; margin-left:auto; margin-right:auto;",
+  pl(p_konc, tooltip = "text")
+)
+```
+
+Koncentrační křivka výrazně odchyluje od diagonály, což potvrzuje silnou nerovnoměrnost v rozdělení úhrad. Malá část poskytovatelů – zejména velké nemocnice (viz @sec-druh-poskytovatele) – váže drtivou většinu prostředků ze zdravotního pojištění.
+
+Koncentrační křivku doplňuje **Giniho koeficient** (viz metodologie @sec-teorie-gini-hhi), který je pro každý rok vypočten z celkových ročních úhrad agregovaných na úroveň poskytovatele (IČZ). Hodnota 0 odpovídá zcela rovnoměrnému rozdělení úhrad mezi poskytovatele, hodnota 1 naopak maximální koncentraci prostředků u jediného subjektu.
+
+Pro posouzení nejistoty odhadu je ke každému Giniho koeficientu dopočten 95% bootstrapový interval spolehlivosti založený na 300 bootstrapových replikacích. Výsledkem je časová řada ročních hodnot koncentrace úhrad.
+
+```{r calculation-gini}
+#| code-fold: false
+# --- Giniho koeficient koncentrace úhrad mezi poskytovateli (IČZ) ----------
+
+# Výpočet koncentrace úhrad mezi poskytovateli (IČZ) po jednotlivých letech
+gini_rok <- data |>
+  filter(!is.na(icz)) |>
+
+  # výpočet Giniho koeficientu pro každý rok zvlášť
+  group_by(rok, icz) |>
+  summarise(uhrada = sum(uhrada_zp, na.rm = TRUE), .groups = "drop") |>
+  group_by(rok) |>
+  summarise(
+    # míra koncentrace úhrad mezi poskytovateli
+    gini = gini(uhrada),
+    
+     # 95% bootstrapový interval spolehlivosti (300 replikací)
+    ci   = list(gini_bootstrap_ci(uhrada, R = 300)),
+    .groups = "drop"
+  ) |>
+  
+  # rozbalení dolní a horní meze intervalu do samostatných sloupců
+  mutate(
+    lwr = vapply(ci, function(z) z[["lwr"]], numeric(1)),
+    upr = vapply(ci, function(z) z[["upr"]], numeric(1))
+  ) |>
+  select(-ci)
+```
+
+Případný trend koncentrace v čase je následně ověřen pomocí **Kendallova testu** **monotónního trendu** (viz metofologie @sec-teorie-monotonie), který hodnotí, zda Giniho koeficient v průběhu let systematicky roste nebo klesá. Test je založen na Kendallově korelačním koeficientu $\tau$ a nevyžaduje předpoklad normality dat.
+
+```{r calculation-kendall-gini}
+# Ověření, zda se koncentrace úhrad v čase mění.
+# ---Kendallův test hodnotí monotónní trend Giniho koeficientu mezi roky ----
+gini_trend <- suppressWarnings(
+  cor.test(gini_rok$rok, gini_rok$gini, method = "kendall")
+)
+```
+
+```{r tbl-gini}
+#| echo: false
+#| tbl-cap: "Giniho koeficient koncentrace úhrad mezi poskytovateli podle roku (95% bootstrapový interval)."
+# Tabulka Giniho koeficientu včetně 95% intervalů spolehlivosti
+gini_rok |>   
+  transmute(Rok = rok,
+
+            # Bodový odhad Giniho koeficientu
+            `Giniho koeficient` = 
+              scales::number(gini, accuracy = 0.001, decimal.mark = ","),
+            
+            # Bootstrapový 95% interval spolehlivosti
+            `95% interval spolehlivosti` = paste0(
+              scales::number(lwr, accuracy = 0.001, decimal.mark = ","), " – ",
+              scales::number(upr, accuracy = 0.001, decimal.mark = ",")
+              )
+            ) |>
+  
+  # Formátování tabulky
+  knitr::kable(align = c("c", "c", "c"))
+```
+
+Giniho koeficient se pohybuje kolem `r scales::number(mean(gini_rok$gini), accuracy = 0.01, decimal.mark = ",")`, což potvrzuje **extrémně vysokou** **koncentraci** úhrad do malého počtu poskytovatelů. Míra této koncentrace zůstává mezi lety 2020–2024 prakticky beze změny. Kendallův trendový test nenaznačuje výraznou změnu koncentrace v čase ($\tau$ = `r scales::number(as.numeric(gini_trend$estimate), accuracy = 0.01, decimal.mark = ",")`, $p$-hodnota = `r format_p(gini_trend$p.value)`).
+
+# Relativně stabilní struktura úhrad v čase
+
+## Úhrady rostou, ale bez zásadní změny struktury péče
+
+```{r fig-typ-pece}
+#| echo: false
+#| warning: false
+#| message: false
+#| fig-cap: "Vývoj úhrad od zdravotních pojišťoven podle typu péče v letech 2020–2024."
+# Agregace úhrad podle typu péče a roku
+data_pece <- data |> 
+    mutate(typ_pece = if_else(is.na(typ_pece), "neuvedeno", typ_pece)) |>
+    group_by(rok, typ_pece) |> 
+    summarise(
+        uhrada_zp = sum(uhrada_zp, na.rm = TRUE),
+        .groups = "drop"
+    ) |>
+    group_by(rok) |>
+    mutate(
+        podil = uhrada_zp / sum(uhrada_zp),
+        label = scales::percent(
+            podil,
+            accuracy = 1,
+            decimal.mark = ",",
+            suffix = " %"
+        )
+    )
+
+# Příprava dat pro graf
+p_pece <- data_pece |> 
+  mutate(label = if_else(typ_pece == "neuvedeno", NA_character_, label)) |>
+  
+  # Struktura úhrad podle typu péče v jednotlivých letech
+  ggplot(aes(
+    x = factor(rok),
+    y = uhrada_zp,
+    fill = typ_pece,
+    
+    # Tooltip pro interaktivní graf
+    text = paste0(
+      "Typ péče: ", typ_pece, "<br>",
+      "Úhrada ZP: ", 
+      scales::number(uhrada_zp, scale = 1e-9, suffix = " mld. Kč", 
+                     accuracy = 0.01, big.mark = " ", decimal.mark = ","), "<br>",
+      "Podíl: ", 
+      scales::percent(podil, accuracy = 0.01, decimal.mark = ",", suffix = " %"),
+      "<br>", "Rok: ", rok
+    )
+  )) +
+  geom_col(width = 0.7) +
+  geom_text(
+    aes(label = label),
+    position = position_stack(vjust = 0.5),
+    color = "white",
+    size = 4
+  ) +
+  scale_fill_manual(values = c(barvy[c(2, 5)], 'gray')) +
+    scale_y_continuous(limits = c(0, NA), 
+                       labels = label_number(scale = 1e-9, suffix = " mld. Kč",
+                                             accuracy = 1, big.mark = " ", 
+                                             decimal.mark = ","),
+                       breaks = seq(0, 50e9, by = 5e9)) +
+  labs(
+    x = "Rok",
+    y = "Celková úhrada od zdravotních pojišťoven",
+    fill = "Typ péče") +
+  guides(x = guide_axis(cap = "both"),
+         y = guide_axis(cap = "upper")) +
+  theme(axis.ticks.x = element_line(color = "black"),
+        axis.line.x = element_line(color = "black"),
+        # axis.text.y = element_text(color = NA),
+        # axis.ticks.y = element_line(color = NA),
+        # axis.line.y = element_line(color = NA),
+        axis.title.y = element_text(margin = margin(r = 10), color = "black"),
+        panel.grid.minor = element_line(color = "transparent"))
+
+# Interaktivní graf
+pl(p_pece, tooltip = "text")
+```
+
+Ve všech sledovaných letech tvoří největší část úhrad **ambulantní péče**, jejíž podíl se pohybuje okolo **60 %**, zatímco **lůžková péče** představuje přibližně **38–40 %** celkových úhrad. Kategorie „neuvedeno“ je zanedbatelná a po roce 2021 se prakticky nevyskytuje. Současně je, jak už bylo řečeno výše, patrný výrazný meziroční růst celkových úhrad zdravotnických prostředků, které vzrostly o 53 %, tj. z přibližně 20 mld. Kč v roce 2020 na více než 31 mld. Kč v roce 2024. Struktura úhrad podle typu péče přitom zůstává relativně stabilní, což naznačuje, že **růst výdajů probíhá obdobně v ambulantní i lůžkové péči**.
+
+```{r}
+# Otestování rozdílů v úhradách mezi ambulantní a lůžkovou péčí
+agg_tp <- data |>
+  filter(!is.na(icz), !is.na(typ_pece)) |>
+  group_by(icz, rok, typ_pece) |>
+  summarise(
+    uhrada = sum(uhrada_zp, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Mannův–Whitneyho test a rank-biseriální korelace
+mw  <- suppressWarnings(wilcox.test(uhrada ~ typ_pece, data = agg_tp))
+rbc <- rank_biserial(agg_tp$uhrada, agg_tp$typ_pece)
+
+# Medián úhrad podle typu péče
+med_tp <- agg_tp |>
+  group_by(typ_pece) |>
+  summarise(
+    med = median(uhrada, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+Protože rozdělení úhrad je silně pravostranně zešikmené, jsou rozdíly mezi skupinami testovány **neparametricky** na úrovni agregace poskytovatel–rok.
+
+```{r}
+#| eval: false
+#| include: false
+# Top 5 skupin odborností v ambulantní péči podle podílu na úhradách
+data |> 
+    filter(typ_pece == 'ambulantní péče') |> 
+    group_by(rok, skupiny_odbornosti) |> 
+    summarise(
+        uhrada_zp = sum(uhrada_zp, na.rm = TRUE),
+        .groups = "drop"
+    ) |>
+    group_by(rok) |>
+    mutate(
+        podil = uhrada_zp / sum(uhrada_zp),
+        podil_label = scales::percent(
+            podil,
+            accuracy = 0.1,
+            decimal.mark = ","
+        )
+    ) |>
+    arrange(rok, desc(podil)) |>
+    slice_head(n = 5) |>
+    View()
+```
+
+**Mannův–Whitneyho test** potvrdil statisticky významný rozdíl mezi ambulantní a lůžkovou péčí ($p$-hodnota `r format_p(mw$p.value)`). Velikost efektu je však podle rank-biseriální korelace ($r_{rb}$ = `r scales::number(rbc, accuracy = 0.01, decimal.mark = ",")`) spíše malá. Medián úhrady na poskytovatele a rok dosahuje `r scales::number(med_tp$med[med_tp$typ_pece == "ambulantní péče"], scale = 1e-6, suffix = " mil. Kč", accuracy = 0.01, decimal.mark = ",")` v ambulantní péči a `r scales::number(med_tp$med[med_tp$typ_pece == "lůžková péče"], scale = 1e-6, suffix = " mil. Kč", accuracy = 0.01, decimal.mark = ",")` v lůžkové péči, což naznačuje vyšší úhrady u poskytovatelů lůžkové péče.
+
+## Více než polovina úhrad míří do nemocniční péče {#sec-druh-poskytovatele}
+
+```{r fig-druh-poskytovatele}
+#| echo: false
+#| fig-cap: "Vývoj úhrad zdravotnických prostředků podle druhu poskytovatele v letech 2020–2024."
+# Doplnění druhu poskytovatele podle IČZ
+data_druh_poskytovatele <- data |>
+  mutate(icz = as.character(icz),
+         uhrada_zp = as.numeric(uhrada_zp)) |> 
+  left_join(druh_poskytovatele |> select(icz, druh_poskytovatele_nazev),
+            by = 'icz') |>
+  mutate(druh_poskytovatele_nazev = if_else(is.na(druh_poskytovatele_nazev),                                "neuvedeno", druh_poskytovatele_nazev)) |>
+  rename(druh_poskytovatele = 'druh_poskytovatele_nazev')
+
+# Agregace druhů poskytovatelů do analytických kategorií
+data_druh_poskytovatele <- data_druh_poskytovatele |>
+  ungroup() |>
+  mutate(druh_poskytovatele_aggr = 
+           case_when(
+             druh_poskytovatele == "Fakultní nemocnice" ~ "fakultní nemocnice",
+             
+             druh_poskytovatele %in% c("Nemocnice", "Specializovaná nemocnice") ~
+               "ostatní nemocniční péče",
+             
+             druh_poskytovatele %in% 
+               c("Poskytovatel ambulantních služeb (nad 5 oborů)",
+                 "Poskytovatel ambulantních služeb (pod 5 oborů)",
+                 "Samostatná ordinace lékaře specialisty") ~ 
+               "specializovaná ambulantní péče",
+             
+             druh_poskytovatele == 
+               "Samostatná ordinace všeobecného praktického lékaře" ~
+               "primární péče",
+             
+             # druh_poskytovatele == "Lékárna" ~
+             #   "lékárenská péče",
+             
+             druh_poskytovatele == "neuvedeno" ~ "neuvedeno",
+             
+             TRUE ~ "ostatní"
+             )
+         ) |>
+  
+  # Roční úhrady a podíly podle agregovaného druhu poskytovatele
+  group_by(rok, druh_poskytovatele_aggr) |>
+  summarise(
+    uhrada_zp = sum(uhrada_zp, na.rm = TRUE),
+    .groups = "drop") |>
+  group_by(rok) |>
+  mutate(podil = uhrada_zp / sum(uhrada_zp),
+         label = scales::percent(podil, accuracy = 1, decimal.mark = ",", 
+                                 suffix = " %")
+         ) |>
+  # Nastavení pořadí kategorií ve vizualizaci
+  mutate(druh_poskytovatele_aggr = 
+           factor(druh_poskytovatele_aggr,
+                  levels = 
+                    c("fakultní nemocnice","ostatní nemocniční péče", 
+                      "primární péče", "specializovaná ambulantní péče",
+                      # "lékárenská péče",
+                      "ostatní", "neuvedeno")
+                  )
+         )
+
+# Graf struktury úhrad podle druhu poskytovatele
+p_druh_poskytovatele <- data_druh_poskytovatele |>
+  
+  # Struktura úhrad podle druhu poskytovatele v jednotlivých letech
+  ggplot(aes(x = factor(rok), y = uhrada_zp,
+             fill = druh_poskytovatele_aggr,
+             
+             # Tooltip pro interaktivní graf
+             text = 
+               paste0("Druh poskytovatele: ", druh_poskytovatele_aggr , "<br>",
+                      "Úhrada ZP: ", 
+                      scales::number(uhrada_zp, scale = 1e-9, suffix = " mld. Kč",
+                                     accuracy = 0.01, big.mark = " ",
+                                     decimal.mark = ","), "<br>", "Podíl: ",
+                      scales::percent(podil, accuracy = 0.01, 
+                                      decimal.mark = ",", suffix = " %"), 
+                      "<br>", "Rok: ", rok)
+             )
+         ) +   
+  geom_col(width = 0.7) +
+  geom_text(aes(label = label),
+            position = position_stack(vjust = 0.5),
+            color = "white", size = 4) +
+  scale_fill_manual(values = c(barvy[c(1:4, 6)], 'gray')) +
+  scale_y_continuous(limits = c(0, NA), 
+                     labels = label_number(scale = 1e-9, suffix = " mld. Kč",                                              accuracy = 1, big.mark = " ", decimal.mark = ","),                        breaks = seq(0, 50e9, by = 5e9)) +
+  labs(x = "Rok",
+       y = "Celková úhrada od zdravotních pojišťoven",
+       fill = "Druh poskytovatele") +
+  guides(x = guide_axis(cap = "both"),
+         y = guide_axis(cap = "upper")) +
+  theme(axis.ticks.x = element_line(color = "black"),
+        axis.line.x = element_line(color = "black"),
+        # axis.text.y = element_text(color = NA),
+        # axis.ticks.y = element_line(color = NA),
+        # axis.line.y = element_line(color = NA),
+        axis.title.y = element_text(margin = margin(r = 10), color = "black"),
+        panel.grid.minor = element_line(color = "transparent"))  
+
+# Interaktivní graf
+pl(p_druh_poskytovatele, tooltip = "text")
+```
+
+Úhrady zdravotnických prostředků dlouhodobě směřují především do **nemocniční péče**. Fakultní a ostatní nemocnice společně čerpají přibližně 55 % všech prostředků. Významnou položku tvoří také poskytovatelé bez jednoznačně identifikovaného typu zařízení, jejichž podíl se stabilně pohybuje kolem 22 %. Ambulantní specialisté a praktičtí lékaři dohromady získávají přibližně pětinu úhrad, zatímco lékárenská péče představuje méně než 1 % a spadá do kategorie "ostatní". Struktura příjemců úhrad se mezi lety 2020–2024 mění jen minimálně; patrný je pouze pozvolný růst podílu nemocniční péče a mírný pokles podílu primární péče.
+
+## Koncentrace úhrad do hlavních medicínských odborností
+
+**V ambulantní péči dlouhodobě tvoří největší část úhrad interní obory**, jejichž podíl se ve všech letech pohybuje okolo 37–39 %. Druhou nejvýznamnější skupinou je **praktické a zubní lékařství**, jehož podíl však postupně klesá. Naopak **chirurgické obory v čase mírně posilují** a v roce 2024 dosahují již více než 12 % ambulantních úhrad. Významný a relativně stabilní podíl mají také odbornosti spojené s ORL, oftalmologií, urologií a ARO.
+
+```{r}
+#| eval: false
+#| include: false
+# Top 5 skupin odborností v lůžkové péči podle podílu na úhradách
+data |> 
+    filter(typ_pece == 'lůžková péče') |> 
+    group_by(rok, skupiny_odbornosti) |> 
+    summarise(
+        uhrada_zp = sum(uhrada_zp, na.rm = TRUE),
+        .groups = "drop"
+    ) |>
+    group_by(rok) |>
+    mutate(
+        podil = uhrada_zp / sum(uhrada_zp),
+        podil_label = scales::percent(
+            podil,
+            accuracy = 0.1,
+            decimal.mark = ","
+        )
+    ) |>
+    arrange(rok, desc(podil)) |>
+    slice_head(n = 5) |>
+    View()
+```
+
+**Lůžková péče je ve všech sledovaných letech výrazně koncentrovaná do tří hlavních skupin odborností** – chirurgických oborů, oborů spojených s gynekologií, ortopedií a plastickou chirurgií a interních oborů. Tyto tři skupiny každoročně tvoří přibližně **90 % všech úhrad v lůžkové péči**. Jejich pořadí se mezi lety mírně mění, ale jejich dominance zůstává stabilní.
+
+Protože rozdělení úhrad je silně pravostranně zešikmené, jsou rozdíly mezi skupinami testovány **neparametricky** na úrovni agregace poskytovatel–rok.
+
+```{r stat-prep}
+#| warning: false
+#| message: false
+#| code-fold: false
+# --- Rozdíly v úhradách mezi skupinami odborností ------------------------
+
+# Agregace úhrad na úroveň poskytovatel × rok × skupina odbornosti
+agg_pi <- data |>
+  filter(!is.na(icz), !is.na(skupiny_odbornosti)) |>
+  group_by(icz, rok, skupiny_odbornosti) |>
+  summarise(
+    uhrada = sum(uhrada_zp, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Kruskalův–Wallisův test a velikost efektu
+kw <- kruskal.test(uhrada ~ skupiny_odbornosti, data = agg_pi)
+kw_eps2 <- epsilon_squared(as.numeric(kw$statistic), nrow(agg_pi))
+```
+
+**Kruskalův–Wallisův test** Kpotvrdil statisticky významné rozdíly v úhradách mezi skupinami odborností (χ²(`r kw$parameter`) = `r scales::number(as.numeric(kw$statistic), big.mark = " ", accuracy = 1, decimal.mark = ",")`, $p$-hodnota `r format_p(kw$p.value)`). Velikost účinku však byla spíše malá ($\varepsilon^2$ = `r scales::number(kw_eps2, accuracy = 0.001, decimal.mark = ",")`), což naznačuje, že skupina odbornosti vysvětluje pouze omezenou část variability úhrad.
+
+```{r}
+#| eval: false
+#| include: false
+# Top 5 typů PZT podle podílu na úhradách v jednotlivých letech
+p_typ <- data |> 
+    group_by(rok, pzt_typ) |> 
+    summarise(
+        uhrada_zp = sum(uhrada_zp, na.rm = TRUE),
+        .groups = "drop"
+    ) |>
+    group_by(rok) |>
+    mutate(
+        podil = uhrada_zp / sum(uhrada_zp),
+        podil_label = scales::percent(
+            podil,
+            accuracy = 0.1,
+            decimal.mark = ","
+        )
+    ) |>
+    arrange(rok, desc(podil)) |>
+    slice_head(n = 5) |>
+    View()
+```
+
+## Největší část úhrad směřuje do kardiologie
+
+Nejvyšší podíl na celkových úhradách zdravotnických prostředků dlouhodobě tvoří skupina **77 – prostředky pro intenzivní a invazivní kardiologii**, jejíž podíl v průběhu let postupně roste z **10,3 % v roce 2020 na 11,4 % v roce 2024**. Významné zastoupení mají také **prostředky pro inkontinentní pacienty (skupina 2)**, které však naopak mírně klesají z přibližně **11,9 % na 9,2 %**.
+
+Stabilně vysoký podíl vykazují rovněž **kardiostimulátory, defibrilátory a chlopně (skupina 53)** a zdravotnické prostředky pro pacienty s diabetem a poruchami metabolismu (skupina 5), jejichž podíl se pohybuje okolo 7–9 %. Významnou skupinu představují také prostředky pro pacienty se stomií (skupina 3), případně v roce 2024 nově výrazněji zastoupený obvazový materiál a náplasti (skupina 1).
+
+Celkově je patrné, že struktura úhrad podle skupin zdravotnických prostředků zůstává v čase relativně stabilní, přesto však některé specializované a technologicky náročné skupiny, zejména v oblasti kardiologie, postupně posilují svůj podíl na celkových výdajích.
+
+## Dominance VZP v úhradách zdravotnických prostředků
+
+```{r}
+#| eval: false
+#| include: false
+
+# Top 5 zdravotních pojišťoven podle podílu na úhradách v jednotlivých letech
+pojistovny |> 
+    group_by(rok, pojistovna_zkratka) |> 
+    summarise(
+        uhrada_zp = sum(uhrada_zp, na.rm = TRUE),
+        .groups = "drop"
+    ) |>
+    group_by(rok) |>
+    mutate(
+        podil = uhrada_zp / sum(uhrada_zp),
+        podil_label = scales::percent(
+            podil,
+            accuracy = 0.1,
+            decimal.mark = ","
+        )
+    ) |>
+    arrange(rok, desc(podil)) |>
+    slice_head(n = 5) |>
+    View()
+```
+
+```{r fig-pojistovny}
+#| echo: false
+#| warning: false
+#| message: false
+#| fig-cap: "Vývoj úhrad od zdravotních pojišťoven podle zdravotních pojišťoven v letech 2020–2024."
+# Agregace pojišťoven do hlavních kategorií a výpočet jejich podílu na úhradách
+data_pojistovny <- pojistovny |>
+  
+    # Menší pojišťovny sloučíme do kategorie "jiná"
+    mutate(pojistovna_zkratka = 
+             if_else(!pojistovna_zkratka %in% 
+                       c("VZP", "ZPMV", "ČPZP", "VoZP", "OZP"), "jiná",
+                     pojistovna_zkratka)) |>
+  
+    # Nastavení pořadí pojišťoven v grafu
+    mutate(pojistovna_zkratka = 
+             factor(pojistovna_zkratka,
+                    levels = c("VZP", "ZPMV", "ČPZP", "VoZP", "OZP", "jiná"))) |>
+    # Roční úhrady podle pojišťovny
+    group_by(rok, pojistovna_zkratka) |> 
+    summarise(
+        uhrada_zp = sum(uhrada_zp, na.rm = TRUE),
+        .groups = "drop"
+    ) |>
+
+    # Podíl pojišťovny na celkových úhradách v daném roce
+    group_by(rok) |>
+    mutate(
+        podil = uhrada_zp / sum(uhrada_zp),
+        label = scales::percent(
+            podil,
+            accuracy = 1,
+            decimal.mark = ",",
+            suffix = " %"
+        )
+    )
+  # Případné skrytí popisků vybrané kategorie
+  # mutate(label = if_else(pojistovna_zkratka == "neuvedeno", NA_character_, label))
+  
+p_pojistovny <- data_pojistovny |>
+  
+  # Struktura úhrad podle pojišťovny v jednotlivých letech
+  ggplot(aes(
+    x = factor(rok),
+    y = uhrada_zp,
+    fill = pojistovna_zkratka,
+    
+    # Tooltip pro interaktivní graf
+    text = paste0(
+      "Typ péče: ", pojistovna_zkratka, "<br>",
+      "Úhrada ZP: ", 
+      scales::number(uhrada_zp, scale = 1e-9, suffix = " mld. Kč", 
+                     accuracy = 0.01, big.mark = " ", decimal.mark = ","), "<br>",
+      "Podíl: ", 
+      scales::percent(podil, accuracy = 0.01, decimal.mark = ",", 
+                      suffix = " %"), 
+      "<br>Rok: ", rok
+    )
+  )) +
+  geom_col(width = 0.7) +
+  geom_text(
+    aes(label = label),
+    position = position_stack(vjust = 0.5),
+    color = "white",
+    size = 4
+  ) +
+  scale_fill_manual(values = c(barvy[c(1:5)], 'gray')) +
+    scale_y_continuous(limits = c(0, NA), 
+                       labels = label_number(scale = 1e-9, suffix = " mld. Kč",
+                                             accuracy = 1, big.mark = " ",
+                                             decimal.mark = ","),
+                       breaks = seq(0, 50e9, by = 5e9)) +
+  labs(
+    x = "Rok",
+    y = "Celková úhrada od zdravotních pojišťoven",
+    fill = "Zdravotní pojišťovna") +
+  guides(x = guide_axis(cap = "both"),
+         y = guide_axis(cap = "upper")) +
+  theme(axis.ticks.x = element_line(color = "black"),
+        axis.line.x = element_line(color = "black"),
+        # axis.text.y = element_text(color = NA),
+        # axis.ticks.y = element_line(color = NA),
+        # axis.line.y = element_line(color = NA),
+        axis.title.y = element_text(margin = margin(r = 10), color = "black"),
+        panel.grid.minor = element_line(color = "transparent"))
+
+# Interaktivní graf
+pl(p_pojistovny, tooltip = "text")
+```
+
+Podíl jednotlivých zdravotních pojišťoven na celkových úhradách zdravotnických prostředků zůstává v čase velmi stabilní. Dominantní postavení dlouhodobě zaujímá **Všeobecná zdravotní pojišťovna (VZP)**, která hradí přibližně **59–61 %** všech úhrad. S výrazným odstupem následuje **Zdravotní pojišťovna ministerstva vnitra ČR (ZPMV)** s podílem okolo **11,5–12,3 %** a **Česká průmyslová zdravotní pojišťovna (ČPZP)** s podílem přibližně **10,5–11,1 %**.
+
+Menší, ale stabilní podíl mají také **Vojenská zdravotní pojišťovna (VoZP)** a **Oborová zdravotní pojišťovna (OZP)**, jejichž podíl se pohybuje kolem 6 %. Celkově je patrné, že struktura úhrad podle zdravotních pojišťoven se mezi lety mění jen minimálně a odráží především dlouhodobé rozložení pojištěnců mezi jednotlivými zdravotními pojišťovnami.
+
+# Statistické ověření koncentrace úhrad
+
+Již z předchozích grafů bylo patrné, že značná část úhrad směřuje k omezenému počtu zdravotních pojišťoven a poskytovatelů. Následující analýza tento vizuální dojem kvantifikuje pomocí **Herfindahlova–Hirschmanova indexu** (HHI) (viz metodologie @sec-teorie-gini-hhi) a z něj odvozeného efektivního počtu subjektů, které umožňují objektivně posoudit míru koncentrace úhrad.
+
+```{r calculation-hhi}
+#| echo: false
+#| warning: false
+#| message: false
+# --- Koncentrace úhrad dle HHI ---------------------------------------------
+# Výpočet Herfindahl-Hirschmanova indexu (HHI) a efektivního počtu subjektů
+# pro různé dimenze trhu zdravotnických prostředků.
+
+# HHI podle krajů
+hhi_kraj <- data |>
+  filter(!is.na(kod_kraj)) |>
+  group_by(rok, kod_kraj) |>
+  summarise(uhrada = sum(uhrada_zp, na.rm = TRUE), .groups = "drop") |>
+  group_by(rok) |>
+  summarise(
+    HHI   = hhi(uhrada)[["hhi"]],
+    eff_n = hhi(uhrada)[["eff_n"]],
+    .groups = "drop"
+  )
+
+# HHI podle druhu poskytovatele
+hhi_poskytovatel <- data |>
+  left_join(druh_poskytovatele, by = "icz") |>
+  rename(druh_poskytovatele = "druh_poskytovatele_nazev") |>
+  filter(!is.na(druh_poskytovatele)) |>
+  group_by(rok, druh_poskytovatele) |>
+  summarise(uhrada = sum(uhrada_zp, na.rm = TRUE), .groups = "drop") |>
+  group_by(rok) |>
+  summarise(
+    HHI   = hhi(uhrada)[["hhi"]],
+    eff_n = hhi(uhrada)[["eff_n"]],
+    .groups = "drop"
+  )
+
+# HHI podle jednotlivých poskytovatelů
+hhi_subjekty <- data |>
+  filter(!is.na(icz)) |>
+  group_by(rok, icz) |>
+  summarise(uhrada = sum(uhrada_zp, na.rm = TRUE), .groups = "drop") |>
+  group_by(rok) |>
+  summarise(
+    HHI   = hhi(uhrada)[["hhi"]],
+    eff_n = hhi(uhrada)[["eff_n"]],
+    .groups = "drop"
+  )
+
+# HHI podle skupin odbornosti
+hhi_odbornost <- data |>
+  filter(!is.na(skupiny_odbornosti)) |>
+  group_by(rok, skupiny_odbornosti) |>
+  summarise(uhrada = sum(uhrada_zp, na.rm = TRUE), .groups = "drop") |>
+  group_by(rok) |>
+  summarise(
+    HHI   = hhi(uhrada)[["hhi"]],
+    eff_n = hhi(uhrada)[["eff_n"]],
+    .groups = "drop"
+  )
+
+# HHI podle skupin zdravotnických prostředků
+hhi_pzt <- data |>
+  filter(!is.na(pzt_typ)) |>
+  group_by(rok, pzt_typ) |>
+  summarise(uhrada = sum(uhrada_zp, na.rm = TRUE), .groups = "drop") |>
+  group_by(rok) |>
+  summarise(
+    HHI   = hhi(uhrada)[["hhi"]],
+    eff_n = hhi(uhrada)[["eff_n"]],
+    .groups = "drop"
+  )
+
+# HHI podle zdravotních pojišťoven
+hhi_poj <- pojistovny |>
+  filter(!is.na(pojistovna_zkratka)) |>
+  group_by(rok, pojistovna_zkratka) |>
+  summarise(uhrada = sum(uhrada_zp, na.rm = TRUE), .groups = "drop") |>
+  group_by(rok) |>
+  summarise(
+    HHI   = hhi(uhrada)[["hhi"]],
+    eff_n = hhi(uhrada)[["eff_n"]],
+    .groups = "drop"
+  )
+```
+
+```{r tbl-hhi}
+#| echo: false
+#| tbl-cap: "Herfindahlův–Hirschmanův index koncentrace úhrad podle zdravotních pojišťoven a krajů."
+
+# Formátování HHI na tři desetinná místa
+fmt_hhi <- function(x) scales::number(x, accuracy = 0.001, decimal.mark = ",")
+
+# Formátování efektivního počtu subjektů na jedno desetinné místo
+fmt_eff <- function(x) scales::number(x, accuracy = 0.1, decimal.mark = ",")
+
+tbl_hhi <- hhi_kraj |> 
+  transmute(Rok = rok, HHI_kraj = fmt_hhi(HHI), Eff_kraj = fmt_eff(eff_n)) |>
+  left_join(hhi_poskytovatel |> transmute(Rok = rok, HHI_posk = fmt_hhi(HHI),
+                                 Eff_posk = fmt_eff(eff_n)),
+            by = "Rok") |>
+  left_join(hhi_odbornost |> transmute(Rok = rok, HHI_odb = fmt_hhi(HHI),
+                                 Eff_odb = fmt_eff(eff_n)),
+            by = "Rok") |>
+  left_join(hhi_pzt |> transmute(Rok = rok, HHI_pzt = fmt_hhi(HHI),
+                                 Eff_pzt = fmt_eff(eff_n)),
+            by = "Rok") |>
+  left_join(hhi_poj |> transmute(Rok = rok, HHI_poj = fmt_hhi(HHI), 
+                                 Eff_poj = fmt_eff(eff_n)),
+            by = "Rok") |>
+  mutate(Rok = as.character(Rok))
+
+# Celkový počet kategorií (skupin) v každé dimenzi
+n_kraj <- data |> filter(!is.na(kod_kraj)) |> distinct(kod_kraj) |> nrow()
+n_posk <- data |>
+  left_join(druh_poskytovatele, by = "icz") |> 
+  filter(!is.na(druh_poskytovatele_nazev)) |> 
+  distinct(druh_poskytovatele_nazev) |> nrow()
+n_sub <- data |>
+  filter(!is.na(icz)) |> 
+  distinct(icz) |> nrow()
+n_odb <- data |> filter(!is.na(skupiny_odbornosti)) |> 
+  distinct(skupiny_odbornosti) |> nrow()
+n_pzt  <- data |> filter(!is.na(pzt_typ))  |> distinct(pzt_typ)  |> nrow()
+n_poj  <- pojistovny |> filter(!is.na(pojistovna_zkratka)) |>
+  distinct(pojistovna_zkratka) |> nrow()
+
+tbl_hhi <- tbl_hhi |>
+  bind_rows(tibble::tibble(
+    Rok = "Celkový počet skupin",
+    HHI_kraj = "", Eff_kraj = as.character(n_kraj),
+    HHI_posk = "", Eff_posk = as.character(scales::number(n_posk, big.mark = " ")),
+    HHI_odb = "", Eff_odb = as.character(n_odb),
+    HHI_pzt = "", Eff_pzt = as.character(n_pzt),
+    HHI_poj = "", Eff_poj = as.character(n_poj)
+  ))
+
+# Podíl efektivního počtu na celkovém počtu kategorií (průměr za roky / celkem)
+fmt_pct <- function(x) scales::percent(x, accuracy = 0.01,
+                                       decimal.mark = ",", suffix = " %")
+tbl_hhi <- tbl_hhi |>
+  bind_rows(tibble::tibble(
+    Rok = "Podíl efekt. počtu",
+    HHI_kraj = "", Eff_kraj = fmt_pct(mean(hhi_kraj$eff_n) / n_kraj),
+    HHI_posk = "", Eff_posk = fmt_pct(mean(hhi_poskytovatel$eff_n) / n_posk),
+    HHI_odb  = "", Eff_odb  = fmt_pct(mean(hhi_odbornost$eff_n) / n_odb),
+    HHI_pzt  = "", Eff_pzt  = fmt_pct(mean(hhi_pzt$eff_n) / n_pzt),
+    HHI_poj  = "", Eff_poj  = fmt_pct(mean(hhi_poj$eff_n) / n_poj)
+  ))
+
+kableExtra::kbl(
+  tbl_hhi,
+  col.names = c("Rok", "HHI", "Efektivní počet", "HHI", "Efektivní počet",
+                "HHI", "Efektivní počet", "HHI", "Efektivní počet",
+                "HHI", "Efektivní počet"),
+  align = c("l", rep("c", 10))
+) |>
+  kableExtra::add_header_above(c(
+    " " = 1,
+    "Kraje" = 2,
+    "Druh poskytovatele" = 2,
+    "Skupiny odborností" = 2,
+    "Skupiny ZP" = 2,
+    "Zdravotní pojišťovny" = 2
+  )) |>
+  kableExtra::row_spec(nrow(tbl_hhi) - 1, bold = TRUE,
+                       extra_css = "border-top: 2px solid #888;") |>
+  kableExtra::row_spec(nrow(tbl_hhi), bold = TRUE) |>
+  kableExtra::kable_styling(full_width = FALSE,
+                            bootstrap_options = c("striped", "hover"))
+```
+
+Trh **zdravotních pojišťoven** je **silně koncentrovaný** (HHI kolem `r scales::number(mean(hhi_poj$HHI), accuracy = 0.01, decimal.mark = ",")`, tj. efektivně jen `r scales::number(mean(hhi_poj$eff_n), accuracy = 1, decimal.mark = ",")` plátci). Zvýšená koncentrace je patrná také podle **druhu** **poskytovatele** (HHI kolem `r scales::number(mean(hhi_poskytovatel$HHI), accuracy = 0.01, decimal.mark = ",")`, tj. efektivně jen `r scales::number(mean(hhi_poskytovatel$eff_n), accuracy = 1, decimal.mark = ",")` skupin poskytovatelů a `r scales::number(mean(hhi_subjekty$eff_n), accuracy = 1, decimal.mark = ",")` jednotlivých poskytovatelů). Zatímco rozdělení úhrad mezi kraje, skupiny odborností a skupiny zdravotnických prostředků je relativně **diverzifikované**, což odpovídá tomu, že výdaje se rozkládají do více kategorií prostředků s několika dominantními skupinami napříč kraji. Všechny hodnoty zůstávají v čase stabilní.
+
+# Závěr
+
+Úhrady zdravotnických prostředků v letech 2020–2024 dlouhodobě rostly navzdory sezónním výkyvům, přičemž po vrcholu v roce 2022 se jejich růstová dynamika postupně zpomalovala. Rozklad růstu ukázal, že nárůst výdajů je způsoben kombinací vyššího počtu vydaných balení a růstu úhrad na balení, přičemž v posledních letech převažuje vliv rostoucího objemu.
+
+Struktura úhrad podle typů poskytovatelů zůstává relativně stabilní. Největší část prostředků směřuje do nemocniční péče, zejména fakultních a dalších nemocnic. Analýza zároveň potvrdila výraznou koncentraci úhrad: značná část prostředků je soustředěna do jedné zdravotní pojišťovny (VZP) a relativně malého počtu poskytovatelů, především krajských a fakultních nemocnic a specializovaných pracovišť (IKEM). Regionální koncentrace úhrad tak pravděpodobně odráží nejen rozmístění obyvatelstva, ale také centralizaci velkých nemocnic, vysoce specializované zdravotní péče a lékařských fakult do několika mála lokalit.
+
+Celkově výsledky naznačují, že růst výdajů na zdravotnické prostředky je tažen především rostoucím objemem poskytované péče, zatímco základní struktura systému zůstává v čase relativně stabilní.
+
+Pro přesnější interpretaci trendů by bylo vhodné zohlednit inflaci a cenový vývoj, aby bylo možné oddělit růst způsobený vyšším objemem péče od růstu cen.
